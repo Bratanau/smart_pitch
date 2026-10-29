@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Dashboard · SmartPitch</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    body { font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+  </style>
+</head>
+<body class="min-h-screen bg-slate-50 text-slate-900">
+  <header class="border-b border-slate-200 bg-white">
+    <div class="mx-auto flex max-w-7xl items-center justify-between px-6 py-4">
+      <a href="/static/dashboard.html" class="text-lg font-semibold tracking-tight">SmartPitch<span class="text-indigo-600">.</span></a>
+      <a href="/static/editor.html" class="rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white transition hover:bg-slate-700">New proposal <span aria-hidden="true">+</span></a>
+    </div>
+  </header>
+  <main class="mx-auto max-w-7xl px-6 py-10">
+    <div class="mb-8">
+      <p class="mb-2 text-sm font-semibold uppercase tracking-wider text-indigo-600">Sales workspace</p>
+      <h1 class="text-3xl font-semibold tracking-tight">Proposal analytics</h1>
+      <p class="mt-2 text-slate-600">See what your prospects spend time reading.</p>
+    </div>
+    <div id="dashboard-error" role="alert" class="mb-5 hidden rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800"></div>
+    <section class="grid gap-6 lg:grid-cols-[minmax(0,1.4fr)_minmax(280px,0.6fr)]">
+      <article class="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+        <div class="mb-6 flex flex-col justify-between gap-4 sm:flex-row sm:items-start">
+          <div>
+            <h2 class="text-lg font-semibold tracking-tight">Attention Heatmap</h2>
+            <p class="mt-1 text-sm text-slate-500">Total time spent in each proposal section</p>
+          </div>
+          <label class="text-sm font-medium text-slate-600">Proposal
+            <select id="proposal-select" class="ml-2 max-w-xs rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-800 outline-none focus:border-indigo-500 focus:ring-4 focus:ring-indigo-100">
+              <option value="">Loading…</option>
+            </select>
+          </label>
+        </div>
+        <div class="relative h-80">
+          <canvas id="attention-chart" aria-label="Time spent reading each proposal section" role="img"></canvas>
+          <div id="empty-chart" class="absolute inset-0 hidden items-center justify-center rounded-lg bg-white/90 text-center text-sm text-slate-500">No reading activity yet. Share the proposal to start collecting insights.</div>
+        </div>
+      </article>
+      <aside class="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+        <h2 class="text-lg font-semibold tracking-tight">Your proposals</h2>
+        <p class="mt-1 text-sm text-slate-500">Select a proposal to inspect its engagement.</p>
+        <div id="proposal-list" class="mt-5 divide-y divide-slate-100">
+          <p class="py-4 text-sm text-slate-500">Loading proposals…</p>
+        </div>
+      </aside>
+    </section>
+  </main>
+  <script>
+    const proposalSelect = document.querySelector("#proposal-select");
+    const proposalList = document.querySelector("#proposal-list");
+    const errorBox = document.querySelector("#dashboard-error");
+    const emptyChart = document.querySelector("#empty-chart");
+    let chart;
+
+    function showError(message) {
+      errorBox.textContent = message;
+      errorBox.classList.remove("hidden");
+    }
+
+    async function loadStats(token) {
+      if (!token) return;
+      try {
+        const response = await fetch(`/api/stats/${encodeURIComponent(token)}`);
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.detail || "Could not load proposal analytics.");
+        const attention = data.attention;
+        const hasActivity = attention.some((item) => item.time_spent_seconds > 0);
+        emptyChart.classList.toggle("hidden", hasActivity);
+        emptyChart.classList.toggle("flex", !hasActivity);
+        const labels = attention.map((item) => ({
+          intro: "Intro",
+          features: "Features",
+          portfolio: "Portfolio",
+          pricing: "Pricing"
+        }[item.block_id] || item.block_id));
+        const values = attention.map((item) => item.time_spent_seconds);
+        if (chart) chart.destroy();
+        chart = new Chart(document.querySelector("#attention-chart"), {
+          type: "bar",
+          data: {
+            labels,
+            datasets: [{
+              label: "Time spent (seconds)",
+              data: values,
+              backgroundColor: ["#818cf8", "#6366f1", "#4f46e5", "#3730a3"],
+              borderRadius: 6,
+              maxBarThickness: 54
+            }]
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: { legend: { display: false } },
+            scales: {
+              x: { grid: { display: false }, border: { display: false }, ticks: { color: "#64748b" } },
+              y: { beginAtZero: true, border: { display: false }, grid: { color: "#f1f5f9" }, ticks: { color: "#64748b" }, title: { display: true, text: "Seconds" } }
+            }
+          }
+        });
+      } catch (error) {
+        showError(error.message || "Unable to load analytics.");
+      }
+    }
+
+    async function loadProposals() {
+      try {
+        const response = await fetch("/api/proposals");
+        const proposals = await response.json();
+        if (!response.ok) throw new Error(proposals.detail || "Could not load proposals.");
+        proposalSelect.replaceChildren();
+        proposalList.replaceChildren();
+        if (proposals.length === 0) {
+          const option = document.createElement("option");
+          option.textContent = "No proposals yet";
+          option.value = "";
+          proposalSelect.append(option);
+          const empty = document.createElement("p");
+          empty.className = "py-4 text-sm text-slate-500";
+          empty.textContent = "Create your first proposal to see it here.";
+          proposalList.append(empty);
+          return;
+        }
+        for (const proposal of proposals) {
+          const option = document.createElement("option");
+          option.value = proposal.access_token;
+          option.textContent = `${proposal.title} — ${proposal.company_name}`;
+          proposalSelect.append(option);
+
+          const item = document.createElement("div");
+          item.className = "flex items-start justify-between gap-3 py-4";
+          const details = document.createElement("div");
+          const title = document.createElement("p");
+          title.className = "font-medium text-slate-800";
+          title.textContent = proposal.title;
+          const company = document.createElement("p");
+          company.className = "mt-1 text-sm text-slate-500";
+          company.textContent = proposal.company_name;
+          details.append(title, company);
+          const selectButton = document.createElement("button");
+          selectButton.type = "button";
+          selectButton.className = "shrink-0 text-sm font-semibold text-indigo-600 hover:text-indigo-800";
+          selectButton.textContent = "View";
+          selectButton.addEventListener("click", () => {
+            proposalSelect.value = proposal.access_token;
+            loadStats(proposal.access_token);
+          });
+          item.append(details, selectButton);
+          proposalList.append(item);
+        }
+        await loadStats(proposals[0].access_token);
+      } catch (error) {
+        showError(error.message || "Unable to load proposals.");
+      }
+    }
+
+    proposalSelect.addEventListener("change", () => loadStats(proposalSelect.value));
+    loadProposals();
+  </script>
+</body>
+</html>
